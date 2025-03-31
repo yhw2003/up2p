@@ -1,0 +1,15 @@
+[build]
+rustflags = ["-A", "dead_code"]
+target = "x86_64-unknown-linux-musl"
+
+[alias]
+remote-server = "run --release --bin remote-server"
+sync-config = "run --release --bin sync-config"
+
+[profile.release]
+lto = true
+panic = "abort"
+opt-level = "z"
+
+[profile.dev]
+opt-level = "z"

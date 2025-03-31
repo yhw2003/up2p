@@ -1,0 +1,10 @@
+FROM rust:slim as builder
+WORKDIR /build/tmp
+COPY . .
+RUN rustup show && cargo build --release --bin server
+
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /build/tmp/target/x86_64-unknown-linux-musl/release/server /app/server
+COPY ./up2pd.toml.build ./up2pd.toml
+CMD [ "/app/server"]
