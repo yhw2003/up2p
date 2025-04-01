@@ -1,4 +1,4 @@
-use std::{cell::Cell, net::IpAddr, pin::Pin, sync::Arc, time::Duration, u64};
+use std::{cell::Cell, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, time::Duration, u64};
 use anyhow::anyhow;
 use tokio::{net::UdpSocket, sync::{mpsc::{Receiver, Sender}, oneshot, Mutex}, task::JoinHandle};
 use tracing::{debug, info, warn};
@@ -68,7 +68,11 @@ impl Up2pCli {
                                 continue;
                             }
                         };
-                        Box::new(PkgExchangeEvent { payload: peer_exchange_pkg.get_payload() }) as Box<dyn CliEvent>
+                        Box::new(PkgExchangeEvent::new(
+                            peer_exchange_pkg.get_payload(),
+                            peer_exchange_pkg.get_baseinfo().clone(),
+                            peer_exchange_pkg.get_target()
+                        )) as Box<dyn CliEvent>
                     }
                     _ => {
                         warn!("unknown pkg type: {}", base_protocol_pkg.get_pkg_type());
@@ -236,11 +240,13 @@ impl Up2pCli {
 
 
     // communicate witch other peer
-    pub async fn pkg_send_to(&self, endpoint_addr: (IpAddr, u16), payload: Vec<u8>) -> anyhow::Result<()> {
+    // you can also send pkg to server, the server will forward it to other peer
+    pub async fn pkg_send_to(&self, endpoint_addr: SocketAddr, payload: Vec<u8>, target: Option<BasePkg>) -> anyhow::Result<()> {
         let pkg = BaseUp2pProtocol::pakge_exchange_with_payload(
             PeerExchangePkg::new(
                 self.base_info.clone(),
-                payload
+                payload,
+                target
             )
         )?;
         self.udp_socket.send_to(pkg.encode_to_vec()?.as_slice(), endpoint_addr).await?;
@@ -252,8 +258,14 @@ impl Up2pCli {
             EventType::P2P_PKG_EXCHANGE, Duration::from_secs(u64::MAX)
         ).await?.expect("event is None");
         let ret  = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap();
+        if let Some(dst) = ret.get_dst() {
+            if dst != self.base_info {
+                warn!("Received pkg not for self");
+                return Err(anyhow!("pkf not for self"));
+            }
+        }
         let data = ret.get_payload();
-        return Ok((self.base_info.clone(), data));
+        return Ok((ret.get_src(), data));
     }
 
 }

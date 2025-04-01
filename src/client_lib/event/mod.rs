@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use crate::core::{uprotocol_pkg::ClientRequestAckPkg, BaseUp2pProtocol};
+use crate::core::{uprotocol_pkg::{BasePkg, ClientRequestAckPkg}, BaseUp2pProtocol};
 
 pub trait CliEvent: Send + Any + 'static {
     fn get_event_type(&self) -> u8;
@@ -51,7 +51,9 @@ impl RequestAckEvent {
 
 #[derive(Debug)]
 pub struct PkgExchangeEvent {
-    pub payload: Vec<u8>,
+    payload: Vec<u8>,
+    src: BasePkg,
+    dst: Option<BasePkg>
 }
 
 impl CliEvent for PkgExchangeEvent {
@@ -66,5 +68,14 @@ impl CliEvent for PkgExchangeEvent {
 impl PkgExchangeEvent {
     pub fn get_payload(&self) -> Vec<u8> {
         self.payload.clone()
+    }
+    pub fn get_dst(&self) -> Option<BasePkg> {
+        self.dst.clone()
+    }
+    pub fn get_src(&self) -> BasePkg {
+        self.src.clone()
+    }
+    pub fn new(payload: Vec<u8>, src: BasePkg, dst: Option<BasePkg>) -> Self {
+        Self { payload, src, dst }
     }
 }

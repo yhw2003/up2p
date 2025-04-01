@@ -1,6 +1,21 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+pub trait PkgVerifyIdentity {
+    fn verify_identity(&self, identity: &str) -> anyhow::Result<()>;
+}
+
+impl<T> PkgVerifyIdentity for T
+where
+    T: GetBaseInfo,
+{
+    fn verify_identity(&self, identity: &str) -> anyhow::Result<()> {
+        if self.get_baseinfo().identity != identity {
+            return Err(anyhow::anyhow!("Identity not match"));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Encode, Decode, Clone)]
 pub struct BasePkg {
@@ -9,12 +24,17 @@ pub struct BasePkg {
     pub identity: String,
 }
 
-
 // This trait means that you can get the base info from this struct
 pub trait GetBaseInfo {
     fn get_baseinfo(&self) -> &BasePkg;
 }
 
+impl PartialEq for BasePkg {
+    fn eq(&self, other: &Self) -> bool {
+        self.client_class == other.client_class
+            && self.client_instance == other.client_instance
+    }
+}
 
 // client hello package
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
@@ -112,21 +132,27 @@ impl ClientRequestAckPkg {
     }
 }
 
+// target required for pkg forward
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct PeerExchangePkg {
     base_info: BasePkg,
     payload: Vec<u8>,
+    target: Option<BasePkg>,
 }
 
 impl PeerExchangePkg {
-    pub fn new(base_info: BasePkg, payload: Vec<u8>) -> Self {
+    pub fn new(base_info: BasePkg, payload: Vec<u8>, target: Option<BasePkg>) -> Self {
         Self {
             base_info,
             payload,
+            target
         }
     }
     pub fn get_payload(&self) -> Vec<u8> {
         self.payload.clone()
+    }
+    pub fn get_target(&self) -> Option<BasePkg> {
+        self.target.clone()
     }
 }
 
@@ -140,6 +166,8 @@ impl GetBaseInfo for PeerExchangePkg {
 mod test {
     use bincode::{config, Decode, Encode};
     use serde::{Deserialize, Serialize};
+
+    use crate::core::uprotocol_pkg::BasePkg;
 
     #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
     struct ReClientHelloPkg {
@@ -165,5 +193,38 @@ mod test {
         let encoded2: Vec<u8> = bincode::encode_to_vec(&client_hello_pkg, config::standard()).unwrap();
         println!("encoded2: {:?}", encoded2);
         assert!(encoded == encoded2);
+    }
+
+    #[tokio::test]
+    async fn test_base_info_eq() {
+        let base_info1 = BasePkg {
+            client_class: "test".to_string(),
+            client_instance: "test".to_string(),
+            identity: "test".to_string(),
+        };
+        let base_info2 = BasePkg {
+            client_class: "test".to_string(),
+            client_instance: "test".to_string(),
+            identity: "test".to_string(),
+        };
+        assert_eq!(base_info1, base_info2);
+        let base_info3 = BasePkg {
+            client_class: "test".to_string(),
+            client_instance: "test".to_string(),
+            identity: "test_a".to_string(),
+        };
+        assert_eq!(base_info1, base_info3);
+        let base_info4 = BasePkg {
+            client_class: "test_a".to_string(),
+            client_instance: "test".to_string(),
+            identity: "test".to_string(),
+        };
+        assert_ne!(base_info1, base_info4);
+        let base_info5 = BasePkg {
+            client_class: "test".to_string(),
+            client_instance: "test_a".to_string(),
+            identity: "test".to_string(),
+        };
+        assert_ne!(base_info1, base_info5);
     }
 }
