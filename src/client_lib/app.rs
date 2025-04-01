@@ -17,6 +17,8 @@ pub struct Up2pCli {
     event_task: Cell<Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>>,
 }
 
+unsafe impl Send for Up2pCli {}
+
 impl Up2pCli {
     /// let (up2p_cli, cancer_hdl) = Up2pCli::new(base_info, udp_socket, server_address); 
     pub fn new(base_info: BasePkg, udp_socket: Arc<UdpSocket>, server_address:(IpAddr, u16) ) -> (Self, oneshot::Sender<()>) {
