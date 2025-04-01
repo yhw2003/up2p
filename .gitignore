@@ -1,5 +1,8 @@
 /target
-peer*
+peer1
+peer2
+peer1.toml
+peer2.toml
 test*
 up2pc.toml
 up2pd.toml
