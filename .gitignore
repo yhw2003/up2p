@@ -4,3 +4,4 @@ test*
 up2pc.toml
 up2pd.toml
 *.tar
+ssh_str
