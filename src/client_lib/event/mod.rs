@@ -2,7 +2,7 @@ use std::any::Any;
 
 use crate::core::{uprotocol_pkg::{BasePkg, ClientRequestAckPkg}, BaseUp2pProtocol};
 
-pub trait CliEvent: Send + Any + 'static {
+pub trait CliEvent: Send + Sync + Any + 'static {
     fn get_event_type(&self) -> u8;
     fn as_any(&self) -> &dyn Any;
 }
