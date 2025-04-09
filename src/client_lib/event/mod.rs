@@ -49,7 +49,7 @@ impl RequestAckEvent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PkgExchangeEvent {
     payload: Vec<u8>,
     src: BasePkg,

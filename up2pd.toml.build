@@ -1,4 +1,4 @@
 address = "0.0.0.0"
 port = 9008
-log_level = "warn"
+log_level = "debug"
 identity = "bbb"

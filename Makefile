@@ -7,14 +7,14 @@ up2pd.tar: docker-image
 docker: up2pd.tar
 	docker image rm up2pd
 
-deploy:docker rm-image
+deploy:
 	ssh_str=$$(cat ssh_str); \
 	scp ./up2pd.tar "$$ssh_str:~/upload"; \
 	ssh $$ssh_str "sudo docker load < ~/upload/up2pd.tar"
 
 rm-image:
 	ssh_str=$$(cat ssh_str); \
-	ssh $$ssh_str "sudo docker image rm up2pd"
+	ssh $$ssh_str "sudo docker image inspect up2pd >/dev/null 2>&1 && sudo docker image rm up2pd || echo 'Image up2pd does not exist'"
 
 clean:
 	rm up2pd.tar

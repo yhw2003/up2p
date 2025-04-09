@@ -6,7 +6,7 @@ use super::{bincodec::BinCodec, uprotocol_pkg::{ClientHelloPkg, ClientRequestAck
 // 定义了这个app通信的基本协议
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct BaseUp2pProtocol {
-    content_len: u8,
+    content_len: usize,
     package_type: u8,
     content: Vec<u8>,
 }
@@ -23,29 +23,23 @@ impl BaseUp2pProtocol {
     pub fn client_hello_with_payload(_payload: ClientHelloPkg) -> anyhow::Result<Self> {
         let payload = _payload.encode_to_vec()?;
         Ok(BaseUp2pProtocol {
-            content_len: payload.len() as u8,
+            content_len: payload.len(),
             package_type: Self::TYPE_HELLO,
             content: payload,
         })
     }
     pub fn request_with_payload(_payload: ClientRequestPkg) -> anyhow::Result<Self> {
         let payload = _payload.encode_to_vec()?;
-        if payload.len() > u8::MAX as usize {
-            return Err(anyhow::anyhow!("payload too large"));
-        }
         Ok(BaseUp2pProtocol {
-            content_len: payload.len() as u8,
+            content_len: payload.len(),
             package_type: Self::TYPE_REQUEST,
             content: payload,
         })
     }
     pub fn response_with_payload(_payload: ClientRequestAckPkg) -> anyhow::Result<Self> {
         let payload = _payload.encode_to_vec()?;
-        if payload.len() > u8::MAX as usize {
-            return Err(anyhow::anyhow!("payload too large"));
-        }
         Ok(BaseUp2pProtocol {
-            content_len: payload.len() as u8,
+            content_len: payload.len(),
             package_type: Self::TYPE_REQUEST_ACK,
             content: payload.to_vec(),
         })
@@ -60,7 +54,7 @@ impl BaseUp2pProtocol {
     pub fn pakge_exchange_with_payload(_payload: PeerExchangePkg) -> anyhow::Result<Self> {
         let payload = _payload.encode_to_vec()?;
         Ok(BaseUp2pProtocol {
-            content_len: payload.len() as u8,
+            content_len: payload.len(),
             package_type: Self::TYPE_PKG_EXCHANGE,
             content: payload,
         })

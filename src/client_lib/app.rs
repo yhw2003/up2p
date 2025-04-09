@@ -1,7 +1,8 @@
 use std::{cell::Cell, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, time::Duration, u64};
 use anyhow::anyhow;
 use tokio::{net::UdpSocket, sync::{mpsc::{Receiver, Sender}, oneshot, Mutex}, task::JoinHandle};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
+use tracing_subscriber::field::debug;
 use crate::{client_lib::event::PkgExchangeEvent, core::{bincodec::BinCodec, request_info::RequestInfo, uprotocol_pkg::{BasePkg, ClientHelloPkg, ClientRequestAckPkg, ClientRequestPkg, GetBaseInfo, PeerExchangePkg}, BaseUp2pProtocol}};
 
 use super::event::{CliEvent, EventType, HelloACKEvent, RequestAckEvent};
@@ -15,6 +16,7 @@ pub struct Up2pCli {
     event_reciver: Cell<Option<Receiver<Box<dyn CliEvent>>>>,
     event_loop_handle: Option<JoinHandle<()>>,
     event_task: Cell<Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>>,
+    exchange_buffer: Arc<Mutex<Vec<PkgExchangeEvent>>>,
 }
 
 unsafe impl Sync for Up2pCli {}
@@ -36,7 +38,7 @@ impl Up2pCli {
                         continue;
                     }
                 };
-                debug!("recv_from: len: {}, endpoint_addr: {}", len, endpoint_addr);
+                trace!("recv_from: len: {}, endpoint_addr: {}", len, endpoint_addr);
                 // handle udp pkg
                 let base_protocol_pkg = match BaseUp2pProtocol::decode_from(&buf[..len])
                 {
@@ -47,20 +49,6 @@ impl Up2pCli {
                     }
                 };
                 let boxed_client_event: Box<dyn CliEvent> = match base_protocol_pkg.get_pkg_type() {
-                    BaseUp2pProtocol::TYPE_HELLO_ACK => {
-                        Box::new(HelloACKEvent) as Box<dyn CliEvent>
-                    }
-                    BaseUp2pProtocol::TYPE_REQUEST_ACK => {
-                        let payload = base_protocol_pkg.get_payload();
-                        let client_request_ack_pkg = match ClientRequestAckPkg::decode_from(payload) {
-                            Ok(client_request_ack_pkg) => client_request_ack_pkg,
-                            Err(e) => {
-                                warn!("decode_from_slice error: {}", e);
-                                continue;
-                            }
-                        };
-                        Box::new(RequestAckEvent::new(client_request_ack_pkg)) as Box<dyn CliEvent>
-                    }
                     BaseUp2pProtocol::TYPE_PKG_EXCHANGE => {
                         let payload = base_protocol_pkg.get_payload();
                         let peer_exchange_pkg = match PeerExchangePkg::decode_from(payload) {
@@ -76,6 +64,20 @@ impl Up2pCli {
                             peer_exchange_pkg.get_target()
                         )) as Box<dyn CliEvent>
                     }
+                    BaseUp2pProtocol::TYPE_HELLO_ACK => {
+                        Box::new(HelloACKEvent) as Box<dyn CliEvent>
+                    }
+                    BaseUp2pProtocol::TYPE_REQUEST_ACK => {
+                        let payload = base_protocol_pkg.get_payload();
+                        let client_request_ack_pkg = match ClientRequestAckPkg::decode_from(payload) {
+                            Ok(client_request_ack_pkg) => client_request_ack_pkg,
+                            Err(e) => {
+                                warn!("decode_from_slice error: {}", e);
+                                continue;
+                            }
+                        };
+                        Box::new(RequestAckEvent::new(client_request_ack_pkg)) as Box<dyn CliEvent>
+                    }
                     _ => {
                         warn!("unknown pkg type: {}", base_protocol_pkg.get_pkg_type());
                         continue;
@@ -84,7 +86,7 @@ impl Up2pCli {
                 // send event to event loop
                 match event_tx.send(boxed_client_event).await {
                     Ok(_) => {
-                        info!("send event to event loop");
+                        trace!("send event to event loop");
                     }
                     Err(e) => {
                         warn!("send event to event loop error: {}", e);
@@ -101,6 +103,7 @@ impl Up2pCli {
             event_loop_handle: None,
             event_task: Cell::new(Some(event_task)),
             stop_sig: Some(cancell_rx),
+            exchange_buffer: Arc::new(Mutex::new(Vec::new())),
         }, cancel_tx)
     }
     pub async fn start(&self) -> anyhow::Result<()> {
@@ -108,6 +111,7 @@ impl Up2pCli {
         let event_task = self.event_task.take().expect("event loop has been started");
         tokio::spawn(async move { event_task.await });
         let event_list = self.event_list.clone();
+        let aeb = self.exchange_buffer.clone();
         tokio::spawn(async move {
             debug!("start to handle event loop");
             loop {
@@ -115,33 +119,64 @@ impl Up2pCli {
                     Some(event) => {
                         let recived_event_type = event.get_event_type();
                         match recived_event_type {
-                            EventType::HELLO_ACK => {
+                            EventType::P2P_PKG_EXCHANGE => {
+                                let pkg_exchange_event = match event.as_any().downcast_ref::<PkgExchangeEvent>() {
+                                    Some(pkg_exchange_event) => pkg_exchange_event.clone(),
+                                    None => {
+                                        warn!("downcast error for PkgExchangeEvent");
+                                        continue;
+                                    }
+                                };
+                                // todo!
+                                // 我没想明白为社么这个锁要在这里 如果在```if !ok_flag```那一行上锁它就会死锁
+                                /*  分析得到的关键日志：
+                                 *  DEBUG up2p::client_lib::app: get lock for exchange buffer(recv)
+                                 *  DEBUG up2p::client_lib::app: eb lock dropped, waiting for event
+                                 *  DEBUG up2p::client_lib::app: writing to exchange buffer
+                                 *  DEBUG up2p::client_lib::app: event loop recv event
+                                 *  DEBUG up2p::client_lib::app: scanning, finde event type: 7, recived event type: 7
+                                 *  DEBUG up2p::client_lib::app: event loop recv event
+                                 *  DEBUG up2p::client_lib::app: scanning, finde event type: 7, recived event type: 7
+                                 *  DEBUG up2p::client_lib::app: event loop recv event
+                                 *  DEBUG up2p::client_lib::app: scanning, finde event type: 7, recived event type: 7
+                                 *  DEBUG up2p::client_lib::app: event received with payload: true
+                                 */
+                                let mut eb = aeb.lock().await;
+                                debug!("ev lenth: {}", eb.len());
                                 let event_list = event_list.lock().await;
+                                let mut ok_flag = false;
                                 for (event_tx, event_type, _) in event_list.iter() {
+                                    debug!("scanning, finde event type: {}, recived event type: {}", event_type, recived_event_type);
+                                    if *event_type == recived_event_type {
+                                        ok_flag = true;
+                                        if let Err(e) = event_tx.send(Some(Box::new(pkg_exchange_event.clone()) as Box<dyn CliEvent>)).await {
+                                            warn!("send event error: {}", e);
+                                        };
+                                        break;
+                                    }
+                                }
+                                drop(event_list);
+                                if !ok_flag {
+                                    // let mut eb = aeb.lock().await;
+                                    debug!("writing to exchange buffer");
+                                    eb.push(pkg_exchange_event);
+                                }
+                            }
+                            EventType::HELLO_ACK => {
+                                let mut event_list = event_list.lock().await;
+                                for (idx, (event_tx, event_type, _)) in event_list.iter().enumerate() {
                                     debug!("scanning, finde event type: {}, recived event type: {}", event_type, recived_event_type);
                                     if *event_type == recived_event_type {
                                         if let Err(e) = event_tx.send(None).await {
                                             warn!("send event error: {}", e);
                                         };
+                                        event_list.remove(idx);
                                         break;
                                     }
                                 }
                                 drop(event_list);
                             }
                             EventType::REQUEST_ACK => {
-                                let event_list = event_list.lock().await;
-                                for (event_tx, event_type, _) in event_list.iter() {
-                                    debug!("scanning, finde event type: {}, recived event type: {}", event_type, recived_event_type);
-                                    if *event_type == recived_event_type {
-                                        if let Err(e) = event_tx.send(Some(event)).await {
-                                            warn!("send event error: {}", e);
-                                        };
-                                        break;
-                                    }
-                                }
-                                drop(event_list);
-                            }
-                            EventType::P2P_PKG_EXCHANGE => {
                                 let event_list = event_list.lock().await;
                                 for (event_tx, event_type, _) in event_list.iter() {
                                     debug!("scanning, finde event type: {}, recived event type: {}", event_type, recived_event_type);
@@ -215,8 +250,10 @@ impl Up2pCli {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
         let id = rand::random::<u128>();
         let mut event_list = self.event_list.lock().await;
+        debug!("get event_list lock");
         event_list.push((event_tx, event_type, id));
         drop(event_list);
+        debug!("event_list lock dropped");
         let wait_result: Option<Box<dyn CliEvent>> = tokio::select! {
             result = event_rx.recv() => {
                 match result {
@@ -256,10 +293,32 @@ impl Up2pCli {
     }
 
     pub async fn pkg_recv_from(&self) -> anyhow::Result<(BasePkg, Vec<u8>)> {
-        let ret = self.subscribe_ack_event(
-            EventType::P2P_PKG_EXCHANGE, Duration::from_secs(u64::MAX)
-        ).await?.expect("event is None");
-        let ret  = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap();
+
+        // let ret = self.subscribe_ack_event(
+        //     EventType::P2P_PKG_EXCHANGE, Duration::from_secs(u64::MAX)
+        // ).await?.expect("event is None");
+        // let ret  = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap();
+        let ret = {
+            let mut eb = self.exchange_buffer.lock().await;
+            debug!("get lock for exchange buffer(recv)");
+            if eb.len() == 0 {
+                drop(eb);
+                debug!("eb lock dropped, waiting for event");
+                let ret = self.subscribe_ack_event(
+                    EventType::P2P_PKG_EXCHANGE, 
+                Duration::from_secs(u64::MAX)
+                ).await?.expect("event is None");
+                let r = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap().clone();
+                debug!("event received {:?}", r);
+                r
+            } else {
+                debug!("reading from exchange buffer");
+                let r = eb.remove(0);
+                drop(eb);
+                debug!("eb lock dropped");
+                r
+            }
+        };
         if let Some(dst) = ret.get_dst() {
             if dst != self.base_info {
                 warn!("Received pkg not for self");
