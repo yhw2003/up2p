@@ -6,7 +6,7 @@ on:
     branches:
       - main
   workflow_dispatch:
-    
+
       
   
 permissions:
@@ -22,7 +22,8 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-
+          toolchain: file:./rust-toolchain.toml
+          
       - name: Build Release
         run: cargo build --release --bin server -vv
 
