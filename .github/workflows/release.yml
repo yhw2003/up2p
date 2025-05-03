@@ -22,7 +22,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: ./rust-toolchain.toml
+          override: true
           
       - name: Build Release
         run: cargo build --release --bin server -vv
