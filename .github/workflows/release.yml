@@ -1,9 +1,12 @@
 name: release build
 
+# main更新时，或手动触发
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    
       
   
 permissions:
@@ -21,7 +24,7 @@ jobs:
           profile: minimal
 
       - name: Build Release
-        run: cargo build --release
+        run: cargo build --release --bin server -vv
 
       - name: Get Executable Name
         id: get_name
