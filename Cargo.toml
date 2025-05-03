@@ -20,22 +20,6 @@ name = "server"
 path = "src/server/main.rs"
 
 [[bin]]
-name = "demo"
-path = "src/demo/minimal.rs"
-
-[[bin]]
-name = "cli-demo"
-path = "src/demo/cli_demo.rs"
-
-[[bin]]
-name = "peer1"
-path = "src/demo/peer1.rs"
-
-[[bin]]
-name = "peer2"
-path = "src/demo/peer2.rs"
-
-[[bin]]
 name = "remote-server"
 path = "xtask/remote_server.rs"
 

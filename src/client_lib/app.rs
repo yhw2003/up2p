@@ -1,8 +1,7 @@
-use std::{cell::Cell, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, time::Duration, u64};
+use std::{cell::Cell, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, time::Duration};
 use anyhow::anyhow;
-use tokio::{net::UdpSocket, sync::{mpsc::{Receiver, Sender}, oneshot, Mutex}, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::{mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender}, oneshot, Mutex, RwLock}, task::JoinHandle};
 use tracing::{debug, info, trace, warn};
-use tracing_subscriber::field::debug;
 use crate::{client_lib::event::PkgExchangeEvent, core::{bincodec::BinCodec, request_info::RequestInfo, uprotocol_pkg::{BasePkg, ClientHelloPkg, ClientRequestAckPkg, ClientRequestPkg, GetBaseInfo, PeerExchangePkg}, BaseUp2pProtocol}};
 
 use super::event::{CliEvent, EventType, HelloACKEvent, RequestAckEvent};
@@ -16,7 +15,9 @@ pub struct Up2pCli {
     event_reciver: Cell<Option<Receiver<Box<dyn CliEvent>>>>,
     event_loop_handle: Option<JoinHandle<()>>,
     event_task: Cell<Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>>,
-    exchange_buffer: Arc<Mutex<Vec<PkgExchangeEvent>>>,
+    // exchange_buffer: Arc<Mutex<Vec<PkgExchangeEvent>>>,
+    exchange_buffer_sender: Arc<UnboundedSender<PkgExchangeEvent>>,
+    exchange_buffer_recv: RwLock<UnboundedReceiver<PkgExchangeEvent>>,
 }
 
 unsafe impl Sync for Up2pCli {}
@@ -94,6 +95,7 @@ impl Up2pCli {
                 }
             }
         });
+        let (buffer_tx, buffer_rx) = tokio::sync::mpsc::unbounded_channel();
         (Up2pCli {
             base_info,
             udp_socket,
@@ -103,7 +105,9 @@ impl Up2pCli {
             event_loop_handle: None,
             event_task: Cell::new(Some(event_task)),
             stop_sig: Some(cancell_rx),
-            exchange_buffer: Arc::new(Mutex::new(Vec::new())),
+            exchange_buffer_recv: RwLock::new(buffer_rx),
+            exchange_buffer_sender: Arc::new(buffer_tx),
+            // exchange_buffer: Arc::new(Mutex::new(Vec::new())),
         }, cancel_tx)
     }
     pub async fn start(&self) -> anyhow::Result<()> {
@@ -111,7 +115,7 @@ impl Up2pCli {
         let event_task = self.event_task.take().expect("event loop has been started");
         tokio::spawn(async move { event_task.await });
         let event_list = self.event_list.clone();
-        let aeb = self.exchange_buffer.clone();
+        let aeb_tx = self.exchange_buffer_sender.clone();
         tokio::spawn(async move {
             debug!("start to handle event loop");
             loop {
@@ -141,26 +145,15 @@ impl Up2pCli {
                                  *  DEBUG up2p::client_lib::app: scanning, finde event type: 7, recived event type: 7
                                  *  DEBUG up2p::client_lib::app: event received with payload: true
                                  */
-                                let mut eb = aeb.lock().await;
-                                debug!("ev lenth: {}", eb.len());
-                                let event_list = event_list.lock().await;
-                                let mut ok_flag = false;
-                                for (event_tx, event_type, _) in event_list.iter() {
-                                    debug!("scanning, finde event type: {}, recived event type: {}", event_type, recived_event_type);
-                                    if *event_type == recived_event_type {
-                                        ok_flag = true;
-                                        if let Err(e) = event_tx.send(Some(Box::new(pkg_exchange_event.clone()) as Box<dyn CliEvent>)).await {
-                                            warn!("send event error: {}", e);
-                                        };
-                                        break;
+                                // debug!("ev lenth: {}", aeb_tx.);
+                                match aeb_tx.send(pkg_exchange_event) {
+                                    Ok(_) => {
+                                        debug!("writing to exchange buffer");
                                     }
-                                }
-                                drop(event_list);
-                                if !ok_flag {
-                                    // let mut eb = aeb.lock().await;
-                                    debug!("writing to exchange buffer");
-                                    eb.push(pkg_exchange_event);
-                                }
+                                    Err(e) => {
+                                        warn!("send event to event loop error: {}", e);
+                                    }
+                                };
                             }
                             EventType::HELLO_ACK => {
                                 let mut event_list = event_list.lock().await;
@@ -293,31 +286,9 @@ impl Up2pCli {
     }
 
     pub async fn pkg_recv_from(&self) -> anyhow::Result<(BasePkg, Vec<u8>)> {
-
-        // let ret = self.subscribe_ack_event(
-        //     EventType::P2P_PKG_EXCHANGE, Duration::from_secs(u64::MAX)
-        // ).await?.expect("event is None");
-        // let ret  = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap();
         let ret = {
-            let mut eb = self.exchange_buffer.lock().await;
-            debug!("get lock for exchange buffer(recv)");
-            if eb.len() == 0 {
-                drop(eb);
-                debug!("eb lock dropped, waiting for event");
-                let ret = self.subscribe_ack_event(
-                    EventType::P2P_PKG_EXCHANGE, 
-                Duration::from_secs(u64::MAX)
-                ).await?.expect("event is None");
-                let r = ret.as_any().downcast_ref::<PkgExchangeEvent>().unwrap().clone();
-                debug!("event received {:?}", r);
-                r
-            } else {
-                debug!("reading from exchange buffer");
-                let r = eb.remove(0);
-                drop(eb);
-                debug!("eb lock dropped");
-                r
-            }
+            let mut aeb_lock = self.exchange_buffer_recv.write().await;
+            aeb_lock.recv().await.ok_or(anyhow!("recv error"))?
         };
         if let Some(dst) = ret.get_dst() {
             if dst != self.base_info {
