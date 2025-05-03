@@ -1,0 +1,43 @@
+name: release build
+
+on:
+  push:
+    branches:
+      - main
+      
+  
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Get Executable Name
+        id: get_name
+        run: |
+          EXE_NAME=$(cargo metadata --format-version 1 | jq -r '.packages[0].name')
+          echo "name=$EXE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          body: Automated nightly build (${{ github.sha }})
+          prerelease: true
+          draft: false
+          files: |
+            target/release/${{ steps.get_name.outputs.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
